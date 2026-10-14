@@ -12,7 +12,7 @@ Drop a photo and a segmentation network cuts out the subject inside your browser
 2. **Runtime.** [transformers.js](https://github.com/huggingface/transformers.js) 3.8.1 from jsDelivr, which wraps ONNX Runtime Web. Inference runs in a module Web Worker (`worker.js`) so the page keeps painting.
 3. **Pre/post.** The page decodes the photo (EXIF-aware), downsizes to ≤1024 px and sends raw RGBA to the worker. The processor resizes to 1024×1024 and rescales to 0–1; the model returns a soft mask (`alphas`, 0–1) which becomes an 8-bit alpha plane.
 4. **Compositing.** The mask is scaled back up with bilinear filtering and applied with `destination-in`, so partial alpha at hair and edges survives. Backgrounds are painted underneath: none (checkerboard / transparent PNG), solid colour, gradient, or the original photo blurred with a canvas filter. Compositing is capped at 2048 px on the long side.
-5. **Cross-origin isolation.** GitHub Pages can't send `COOP`/`COEP` headers, and without them there is no `SharedArrayBuffer`, so ONNX Runtime's WASM backend runs on one thread. A vendored [`coi-serviceworker`](https://github.com/gzuidhof/coi-serviceworker) (MIT) re-serves every response with those headers after the first load. Add `?noiso` to the URL to turn it off and compare.
+5. **Cross-origin isolation.** GitHub Pages can't send `COOP`/`COEP` headers, and without them there is no `SharedArrayBuffer`, so ONNX Runtime's WASM backend runs on one thread. A vendored [`coi-serviceworker`](https://github.com/gzuidhof/coi-serviceworker) re-serves every response with those headers after the first load. Add `?noiso` to the URL to turn it off and compare.
 
 ## Results
 
@@ -53,7 +53,7 @@ style.css             design tokens (light/dark), layout
 app.js                input (drop / paste / picker / samples), compositing, divider, download
 worker.js             transformers.js + ONNX Runtime Web inference, WebGPU→WASM fallback
 coi-serviceworker.js  vendored v0.1.7, adds COOP/COEP on GitHub Pages
-photos/               three CC0 sample photos + LICENSES.md
+photos/               three public-domain sample photos
 docs/screenshot.png   README screenshot
 ```
 
@@ -66,6 +66,7 @@ docs/screenshot.png   README screenshot
 - Portrait blur blurs the original including the subject, so a faint halo can show.
 - First visit: 44 MB download and one automatic reload while the service worker installs. WebGPU doesn't run this export with the ONNX Runtime in transformers.js 3.8.1.
 
-## License
+## Credits
 
-MIT for the code. Model: Apache-2.0 (ORMBG). Sample photos: CC0, see [`photos/LICENSES.md`](photos/LICENSES.md).
+- Model: [ORMBG](https://huggingface.co/onnx-community/ormbg-ONNX), Apache-2.0.
+- Sample photos (public domain, Wikimedia Commons): [portrait](https://commons.wikimedia.org/wiki/File:Brunette_woman_portrait_(Unsplash).jpg) by Christopher Campbell, [dog](https://commons.wikimedia.org/wiki/File:Boxer_(dog)_In_Iran,_Mostafa_Meraji_04.jpg) by Mostafa Meraji, [watch](https://commons.wikimedia.org/wiki/File:Mondaine_Classic_A669.30008.16SBO_watch.jpg) by DimiTalen.
