@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cutout — on-device background studio</title>
+<meta name="description" content="Drop a photo and a segmentation network cuts out the subject inside your browser. Swap the background, drag a before/after divider, download a PNG. Nothing is uploaded.">
+<meta property="og:title" content="Cutout — on-device background studio">
+<meta property="og:description" content="Background removal that runs entirely in your browser: ISNet via transformers.js on WebGPU or multithreaded WASM.">
+<meta property="og:image" content="https://temirlanzzz.github.io/cutout/docs/screenshot.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121211'/%3E%3Ccircle cx='16' cy='13' r='5' fill='%23f4f3ef'/%3E%3Cpath d='M7 27c1.5-5 5-7.5 9-7.5s7.5 2.5 9 7.5z' fill='%23f4f3ef'/%3E%3Crect x='22' y='5' width='5' height='5' fill='%23ff5a1f'/%3E%3C/svg%3E">
+<script>window.coi={shouldRegister:()=>!/[?&]noiso\b/.test(location.search),shouldDeregister:()=>/[?&]noiso\b/.test(location.search),quiet:true}</script>
+<script src="coi-serviceworker.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" crossorigin="anonymous">
+<script>try{const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="nav">
+  <div class="wrap">
+    <a class="logo" href="./"><i></i>cutout</a>
+    <ul>
+      <li><a href="https://temirlanzzz.github.io">← temirlan</a></li>
+      <li><a href="https://github.com/temirlanzzz/cutout">github<span class="hide-sm"> ↗</span></a></li>
+      <li><button class="theme" id="theme" aria-label="Toggle dark mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></svg></button></li>
+    </ul>
+  </div>
+</nav>
+
+<main>
+<header class="hero wrap">
+  <div class="kicker mono"><span><b>●</b> on-device background studio</span><span>isnet · transformers.js · onnx runtime web</span></div>
+  <h1>Drop a photo. The background comes off <em>inside your browser.</em></h1>
+  <p class="sub">A segmentation network runs locally on multithreaded WebAssembly, then the soft mask drives a canvas compositor: transparent, colour, gradient or portrait blur. Drag the divider to compare. Nothing is uploaded.</p>
+</header>
+
+<section class="demo wrap" id="demo" aria-label="Live demo">
+  <div class="card">
+    <div class="bar mono"><span>fig. 1 — stage</span><span class="status" id="status" aria-live="polite">model not loaded · ~44 mb on first run</span></div>
+    <div class="progress" aria-hidden="true"><i id="prog"></i></div>
+    <div class="stage-wrap" id="stageWrap">
+      <div class="drop" id="drop">
+        <div>
+          <h2>Drop a photo here</h2>
+          <p>or paste one, or pick a file. The first run downloads the model (~44 MB, cached afterwards); every pixel stays on this device.</p>
+          <button class="btn primary" id="pick" type="button">choose a photo</button>
+        </div>
+      </div>
+      <div class="stage" id="stage" hidden tabindex="0" role="slider" aria-label="Before / after divider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">
+        <div class="checker" id="checker"></div>
+        <canvas id="after" aria-label="Result"></canvas>
+        <canvas id="before" aria-label="Original"></canvas>
+        <div class="scan"></div>
+        <div class="handle"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></span></div>
+        <span class="tag l mono">before</span><span class="tag r mono">after</span>
+        <span class="busy mono"><i></i><span id="busyText">segmenting</span></span>
+      </div>
+    </div>
+    <div class="samples">
+      <span class="lbl mono">samples</span>
+      <button class="thumb" data-sample="portrait" aria-label="Sample: portrait" aria-pressed="false"><img src="photos/portrait-thumb.jpg" alt="" width="52" height="40"></button>
+      <button class="thumb" data-sample="dog" aria-label="Sample: dog on a chair" aria-pressed="false"><img src="photos/dog-thumb.jpg" alt="" width="52" height="40"></button>
+      <button class="thumb" data-sample="watch" aria-label="Sample: wristwatch" aria-pressed="false"><img src="photos/watch-thumb.jpg" alt="" width="52" height="40"></button>
+      <span class="grow"></span>
+      <button class="btn" id="pick2" type="button">your photo</button>
+    </div>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+
+  <aside class="card panel" aria-label="Controls">
+    <div class="group">
+      <span class="mono">background</span>
+      <div class="seg" id="bgMode" role="group" aria-label="Background">
+        <button data-mode="transparent" aria-pressed="true">none</button>
+        <button data-mode="color" aria-pressed="false">colour</button>
+        <button data-mode="gradient" aria-pressed="false">gradient</button>
+        <button data-mode="blur" aria-pressed="false">blur</button>
+      </div>
+      <div class="opts" data-for="color">
+        <div class="swatches" id="swatches">
+          <button class="sw" data-c="#ffffff" style="background:#ffffff" aria-label="White" aria-pressed="true"></button>
+          <button class="sw" data-c="#f4f3ef" style="background:#f4f3ef" aria-label="Paper" aria-pressed="false"></button>
+          <button class="sw" data-c="#121211" style="background:#121211" aria-label="Ink" aria-pressed="false"></button>
+          <button class="sw" data-c="#ff5a1f" style="background:#ff5a1f" aria-label="Orange" aria-pressed="false"></button>
+          <button class="sw" data-c="#2f5d50" style="background:#2f5d50" aria-label="Pine" aria-pressed="false"></button>
+          <button class="sw" data-c="#3d5a80" style="background:#3d5a80" aria-label="Slate blue" aria-pressed="false"></button>
+          <label class="sw custom" aria-label="Custom colour"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><input type="color" id="custom" value="#d9c7a7"></label>
+        </div>
+      </div>
+      <div class="opts" data-for="gradient">
+        <div class="grads" id="grads">
+          <button data-g="studio" aria-label="Studio grey" aria-pressed="true" style="background:radial-gradient(circle at 50% 40%,#f2f1ed,#b9b5ab)"></button>
+          <button data-g="ember" aria-label="Ember" aria-pressed="false" style="background:linear-gradient(160deg,#ffd9c4,#ff7a45)"></button>
+          <button data-g="night" aria-label="Night" aria-pressed="false" style="background:linear-gradient(180deg,#3a3833,#121211)"></button>
+        </div>
+      </div>
+      <div class="opts" data-for="blur">
+        <div class="slider"><input type="range" id="blurAmt" min="2" max="40" value="14" aria-label="Blur radius"><output class="mono" id="blurOut">14px</output></div>
+      </div>
+    </div>
+    <div class="group">
+      <span class="mono">view</span>
+      <div class="seg" id="viewMode" role="group" aria-label="View">
+        <button data-view="split" aria-pressed="true">before / after</button>
+        <button data-view="result" aria-pressed="false">result</button>
+        <button data-view="mask" aria-pressed="false">mask</button>
+      </div>
+    </div>
+    <div class="group">
+      <div class="actions">
+        <button class="btn primary" id="download" type="button" disabled>download png</button>
+        <button class="btn" id="reset" type="button" disabled aria-label="Clear photo">clear</button>
+      </div>
+    </div>
+    <div class="group">
+      <span class="mono">this device, this run</span>
+      <dl class="stats" id="stats">
+        <dt class="mono">backend</dt><dd id="sBackend">—</dd>
+        <dt class="mono">isolated</dt><dd id="sIso">—</dd>
+        <dt class="mono">model load</dt><dd id="sLoad">—</dd>
+        <dt class="mono">inference</dt><dd id="sInfer" class="hl">—</dd>
+        <dt class="mono">pre / post</dt><dd id="sPre">—</dd>
+        <dt class="mono">image</dt><dd id="sImg">—</dd>
+      </dl>
+      <div class="seg" id="backendPref" role="group" aria-label="Backend preference" style="margin-top:14px">
+        <button data-pref="auto" aria-pressed="true">auto</button>
+        <button data-pref="webgpu" aria-pressed="false">webgpu</button>
+        <button data-pref="wasm" aria-pressed="false">wasm</button>
+      </div>
+      <p class="note" id="prefNote">WASM with int8 weights (~44 MB) and one thread per core, up to 8, when the page is cross-origin isolated. WebGPU is opt-in.</p>
+    </div>
+  </aside>
+</section>
+
+<section class="writeup wrap" id="writeup">
+  <div class="sec">
+    <span class="mono">01 — how it works</span>
+    <div>
+      <h2>A 1024×1024 mask, a canvas, and nothing on a server.</h2>
+      <ol>
+        <li><strong>Model.</strong> <code>onnx-community/ormbg-ONNX</code> — the open RMBG model, an ISNet architecture under Apache-2.0. On WASM I load the int8-quantized export (44.3 MB); on WebGPU the fp16 export (88.1 MB). Both are fetched from the Hugging Face hub and cached by the browser.</li>
+        <li><strong>Runtime.</strong> transformers.js 3.8.1 from jsDelivr wraps ONNX Runtime Web. Inference runs in a module Web Worker so the page keeps painting while the network is busy.</li>
+        <li><strong>Pre/post.</strong> The processor resizes to 1024×1024 and rescales to 0–1. The output is a single-channel soft mask in 0–1, which I turn into an 8-bit alpha plane.</li>
+        <li><strong>Compositing.</strong> The mask is scaled back up to the photo with bilinear filtering and applied with <code>destination-in</code>, so hair and edges keep their partial alpha. Backgrounds are painted underneath: nothing (checkerboard), a solid colour, a gradient, or the original photo blurred with a canvas filter.</li>
+        <li><strong>Isolation.</strong> GitHub Pages can't send COOP/COEP headers, and without them there's no <code>SharedArrayBuffer</code> and so no WASM threads. A vendored <code>coi-serviceworker</code> re-serves every response with those headers after the first load.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="sec" id="results">
+    <span class="mono">02 — measured</span>
+    <div>
+      <h2 id="resHead">About two and a half seconds a photo, once the page is isolated.</h2>
+      <p>Measured by me in headless Chrome 155 on a Ryzen 7 255 laptop (8 cores / 16 threads), driving this page over the DevTools protocol, three sample photos plus a repeat, four passes. Times come from <code>performance.now()</code> inside the worker; inference is the model call only, at 1024×1024 input.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>setup</th><th>model load</th><th>inference / photo</th></tr></thead>
+        <tbody>
+          <tr><td>WASM, int8, 8 threads, isolated via service worker — cold cache (44.3 MB download)</td><td class="n">7.3 s</td><td class="n"><b>2.0–2.6 s</b></td></tr>
+          <tr><td>same, warm cache</td><td class="n">0.25–0.78 s</td><td class="n"><b>2.2–3.3 s</b></td></tr>
+          <tr><td>WASM, int8, not isolated (<code>?noiso</code>) → 1 thread</td><td class="n">0.63 s</td><td class="n">15.6–15.8 s</td></tr>
+          <tr><td>WebGPU, fp16 (88.1 MB) — adapter with <code>shader-f16</code> present</td><td class="n">10.2 s</td><td class="n">fails, falls back to WASM</td></tr>
+        </tbody>
+      </table></div>
+      <p>Pre-processing (resize + rescale) took 57–109 ms and turning the mask into alpha 2–7 ms, so the network is essentially the whole budget. The first inference after a load is usually the slowest; in later screenshot runs it reached 3.7 s. Your own numbers for this device appear in the panel next to the demo.</p>
+    </div>
+  </div>
+
+  <div class="sec">
+    <span class="mono">03 — what i learned</span>
+    <div>
+      <h2>Headers mattered more than the model.</h2>
+      <ul>
+        <li><strong>Isolation is a 6× switch.</strong> The same int8 model on the same machine went from ~15.7 s to ~2.0–2.6 s per photo purely by making the page cross-origin isolated, which lets ONNX Runtime use <code>SharedArrayBuffer</code> threads. On GitHub Pages that took a 118-line service worker, not a better model.</li>
+        <li><strong>"WebGPU available" doesn't mean "this model runs on WebGPU".</strong> Headless Chrome exposed an fp16-capable adapter and the session compiled, then the first run threw <code>using ceil() in shape computation is not yet supported for MaxPool</code>: ISNet's pooling layers use <code>ceil_mode</code>. So WASM is the default, WebGPU is opt-in, and a failure restarts the worker on WASM — reusing the same worker kept hitting the WebGPU error.</li>
+        <li><strong>Read the graph, don't guess the names.</strong> This export's input is <code>pixel_values</code> and its output is <code>alphas</code>, not the <code>input</code>/<code>output</code> in most RMBG snippets. I read them from the ONNX session instead of hard-coding them.</li>
+        <li><strong>The web build won't look for local models</strong> unless told to, so I set <code>allowLocalModels = false</code> explicitly and fetch from the hub. Both this and the input name fail quietly unless you surface worker errors in the page — so every error is shown in the status line.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="sec">
+    <span class="mono">04 — limits</span>
+    <div>
+      <h2>Good edges, not studio edges.</h2>
+      <ul>
+        <li>On the portrait the long hair comes through soft and mostly right, but the outer strands carry a dark-green fringe from the foliage behind them, and a couple of isolated leaf specks survive in the background. It isn't matting-grade.</li>
+        <li>The model decides what "the subject" is, and it's generous. On the dog photo it keeps the whole chair the dog is standing in front of; on the watch photo it keeps the black display cushion the strap is wrapped around. Both are defensible, neither is what I'd want for a product cut.</li>
+        <li>Thin, low-contrast parts get partial alpha: the dog's hind legs come out partly transparent against a dark background.</li>
+        <li>The mask is predicted at 1024×1024 and upscaled, so on large photos the edge is smoother than the pixels it cuts.</li>
+        <li>Portrait blur blurs the original, subject included, so a faint halo can show around the edge. A real lens blur would inpaint behind the subject first.</li>
+        <li>First visit costs a 44 MB download and one automatic reload (the service worker installing). WebGPU doesn't run this export with the ONNX Runtime bundled in transformers.js 3.8.1.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap mono">
+    <span>cutout · mit · sample photos cc0 (<a href="https://github.com/temirlanzzz/cutout/blob/main/photos/LICENSES.md">sources</a>)</span>
+    <span><a href="https://temirlanzzz.github.io">temirlan zarymkanov</a> · <a href="https://github.com/temirlanzzz/cutout">source ↗</a></span>
+  </div>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
