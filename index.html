@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip" href="#demo">Skip to editor</a>
 <nav class="nav">
   <div class="wrap">
     <a class="logo" href="./"><i></i>cutout</a>
@@ -31,28 +32,29 @@
 
 <main>
 <header class="hero wrap">
-  <div class="kicker mono"><span><b>●</b> on-device background studio</span><span>isnet · transformers.js · onnx runtime web</span></div>
-  <h1>Drop a photo. The background comes off <em>inside your browser.</em></h1>
-  <p class="sub">A segmentation network runs locally on multithreaded WebAssembly, then the soft mask drives a canvas compositor: transparent, colour, gradient or portrait blur. Drag the divider to compare. Nothing is uploaded.</p>
+  <div class="kicker mono"><span><b>●</b> your private photo workbench</span><span>01 / cut · 02 / refine · 03 / export</span></div>
+  <h1>Keep the good part.<br><em>Make it yours.</em></h1>
+  <p class="sub">Remove a background, perfect the edges, set a new scene. A small creative studio that runs on your device. Your photos never leave this browser.</p>
 </header>
 
 <section class="demo wrap" id="demo" aria-label="Live demo">
   <div class="card">
-    <div class="bar mono"><span>fig. 1 — stage</span><span class="status" id="status" aria-live="polite">model not loaded · ~44 mb on first run</span></div>
+    <div class="bar mono"><span>THE WORKBENCH</span><span class="status" id="status" aria-live="polite">model not loaded · ~44 mb on first run</span></div>
     <div class="progress" aria-hidden="true"><i id="prog"></i></div>
     <div class="stage-wrap" id="stageWrap">
       <div class="drop" id="drop">
         <div>
-          <h2>Drop a photo here</h2>
+          <div class="drop-art" aria-hidden="true"><span>✦</span><i></i><b>your next great cut</b></div>
+          <h2>A fresh canvas awaits.</h2>
           <p>or paste one, or pick a file. The first run downloads the model (~44 MB, cached afterwards); every pixel stays on this device.</p>
-          <button class="btn primary" id="pick" type="button">choose a photo</button>
+          <button class="btn primary" id="pick" type="button">Open a photo ↗</button><span class="drop-formats mono">JPG · PNG · WEBP · paste or drop</span>
         </div>
       </div>
       <div class="stage" id="stage" hidden tabindex="0" role="slider" aria-label="Before / after divider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">
         <div class="checker" id="checker"></div>
         <canvas id="after" aria-label="Result"></canvas>
         <canvas id="before" aria-label="Original"></canvas>
-        <div class="scan"></div>
+        <div id="brushCursor" aria-hidden="true" hidden></div><div class="scan"></div>
         <div class="handle"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></span></div>
         <span class="tag l mono">before</span><span class="tag r mono">after</span>
         <span class="busy mono"><i></i><span id="busyText">segmenting</span></span>
@@ -66,12 +68,32 @@
       <span class="grow"></span>
       <button class="btn" id="pick2" type="button">your photo</button>
     </div>
+    <label class="manual-choice"><input id="useAI" type="checkbox" checked> Start with AI removal <span>~44 MB on first use. Uncheck for manual editing.</span></label>
     <input type="file" id="file" accept="image/*" hidden>
   </div>
 
   <aside class="card panel" aria-label="Controls">
+    <div class="panel-title"><span class="mono">STUDIO TOOLS</span><span class="private-badge">● Local only</span></div>
     <div class="group">
-      <span class="mono">background</span>
+      <span class="mono">01 / refine your cut</span>
+      <div class="seg" id="toolMode" role="group" aria-label="Refinement tool">
+        <button data-tool="compare" aria-pressed="true">Compare</button>
+        <button data-tool="erase" aria-pressed="false" disabled>Erase</button>
+        <button data-tool="restore" aria-pressed="false" disabled>Restore</button>
+      </div>
+      <div class="brush-controls" id="brushControls" hidden>
+        <label for="brushSize">Brush size <output id="brushOut">60 px</output></label>
+        <input type="range" id="brushSize" min="4" max="300" value="60">
+        <label for="brushSoftness">Soft edge <output id="softOut">35%</output></label>
+        <input type="range" id="brushSoftness" min="0" max="100" value="35">
+        <p class="note">Paint on the image. Keyboard: focus image, arrows to move, Enter to paint. Shift moves faster.</p>
+      </div>
+      <div class="history-actions"><button class="btn" id="undo" disabled aria-label="Undo mask edit">↶ Undo</button><button class="btn" id="redo" disabled aria-label="Redo mask edit">↷ Redo</button></div>
+      <button class="text-button" id="manual" disabled>Start manually · skip AI download</button>
+      <p class="note" id="editNote">AI gets you started. Erase extras or restore missing details. Up to 12 strokes of undo.</p>
+    </div>
+    <div class="group">
+      <span class="mono">02 / set the scene</span>
       <div class="seg" id="bgMode" role="group" aria-label="Background">
         <button data-mode="transparent" aria-pressed="true">none</button>
         <button data-mode="color" aria-pressed="false">colour</button>
@@ -86,7 +108,7 @@
           <button class="sw" data-c="#ff5a1f" style="background:#ff5a1f" aria-label="Orange" aria-pressed="false"></button>
           <button class="sw" data-c="#2f5d50" style="background:#2f5d50" aria-label="Pine" aria-pressed="false"></button>
           <button class="sw" data-c="#3d5a80" style="background:#3d5a80" aria-label="Slate blue" aria-pressed="false"></button>
-          <label class="sw custom" aria-label="Custom colour"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><input type="color" id="custom" value="#d9c7a7"></label>
+          <label class="sw custom" aria-label="Custom colour"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><input type="color" aria-label="Custom background colour" id="custom" value="#d9c7a7"></label>
         </div>
       </div>
       <div class="opts" data-for="gradient">
@@ -101,7 +123,7 @@
       </div>
     </div>
     <div class="group">
-      <span class="mono">view</span>
+      <span class="mono">inspect your work</span>
       <div class="seg" id="viewMode" role="group" aria-label="View">
         <button data-view="split" aria-pressed="true">before / after</button>
         <button data-view="result" aria-pressed="false">result</button>
@@ -109,8 +131,11 @@
       </div>
     </div>
     <div class="group">
+      <span class="mono">03 / take it with you</span>
+      <div class="export-options"><label>Format<select id="exportFormat"><option value="png">PNG · lossless</option><option value="webp">WebP · smaller</option></select></label><label>Size<select id="exportScale"><option value="1">Full size</option><option value="0.5">Half size</option><option value="0.25">Quarter size</option></select></label></div>
+      <p id="exportInfo" class="note">Up to 2048 px · transparency preserved</p>
       <div class="actions">
-        <button class="btn primary" id="download" type="button" disabled>download png</button>
+        <button class="btn primary" id="download" type="button" disabled>Export image ↓</button>
         <button class="btn" id="reset" type="button" disabled aria-label="Clear photo">clear</button>
       </div>
     </div>

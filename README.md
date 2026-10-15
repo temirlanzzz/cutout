@@ -1,8 +1,10 @@
 # Cutout — on-device background studio
 
-Drop a photo and a segmentation network cuts out the subject inside your browser. Swap the background (colour, gradient or portrait blur), drag a before/after divider, download a PNG. Nothing is uploaded.
+A private, on-device photo workbench. Remove a background with AI or start manually, refine the mask with erase/restore brushes and undo, set a colour/gradient/portrait-blur scene, and export PNG or WebP. Your photo is never uploaded.
 
 **Live demo:** https://temirlanzzz.github.io/cutout/
+
+Original interface reference (the refinement studio redesign is described below):
 
 ![Cutout: the portrait sample with its background removed, before/after divider in the middle](docs/screenshot.png)
 
@@ -70,3 +72,41 @@ docs/screenshot.png   README screenshot
 
 - Model: [ORMBG](https://huggingface.co/onnx-community/ormbg-ONNX), Apache-2.0.
 - Sample photos (public domain, Wikimedia Commons): [portrait](https://commons.wikimedia.org/wiki/File:Brunette_woman_portrait_(Unsplash).jpg) by Christopher Campbell, [dog](https://commons.wikimedia.org/wiki/File:Boxer_(dog)_In_Iran,_Mostafa_Meraji_04.jpg) by Mostafa Meraji, [watch](https://commons.wikimedia.org/wiki/File:Mondaine_Classic_A669.30008.16SBO_watch.jpg) by DimiTalen.
+
+## Refinement studio
+
+The interface now uses a lilac creative-workbench system, a dark dotted image stage, numbered tools, light/dark themes, responsive single-column controls, visible focus, and reduced-motion support. The original technical write-up and benchmark history remain below the editor.
+
+- **Erase and restore:** paint the alpha mask with a 4–300 image-pixel brush and adjustable edge softness. Fast pointer movements interpolate a continuous stroke. Touch and pen use the same pointer workflow.
+- **Undo/redo:** keep the latest 12 mask strokes in memory. Buttons or Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z. New edits clear redo; opening/clearing an image clears history.
+- **Keyboard refinement:** choose a tool, focus the image, move with arrow keys (Shift moves farther), then Enter/Space to stamp the brush. The before/after divider also supports arrows, Home and End.
+- **Manual mode:** uncheck “Start with AI removal” before opening an image. No model download or inference is requested; the original image is fully selected so you can erase its background yourself. “Start manually” also cancels an in-progress AI run or recovers after a failed model load.
+- **Export:** PNG (lossless) or WebP (quality 92), full/half/quarter working dimensions. Both preserve transparency. Exports always use the composite, even while viewing the mask or comparison. Dimensions are shown before export; browser format fallback gets the correct filename extension.
+- **Safer asynchronous work:** late sample/decode results cannot replace a newer photo or undo Clear. Worker runs are serialized; obsolete inference results/errors are ignored. Failed sample fetches and model loads have visible recovery messages.
+
+### Verification
+
+No build dependencies are needed for the app or deterministic tests (Node 22+):
+
+```sh
+npm test
+npm run check
+```
+
+Optional real-browser checks use local sample photos with model requests blocked:
+
+```sh
+npm install --no-save playwright@1.56.1
+npx playwright install chromium
+node tests/browser.mjs
+# Or use an existing Chromium:
+CHROMIUM_PATH=/usr/bin/chromium node tests/browser.mjs
+```
+
+The browser suite exercises manual editing, exact alpha-pixel undo/redo, comparison, mobile overflow, and clearing a pending sample load. It decodes the actual downloaded PNG/WebP bytes at full and half scale to assert dimensions, fully transparent erased pixels, opaque untouched pixels, and partially transparent brush edges, including exports made from mask view. It produces desktop/mobile screenshots in `docs/studio-*.png`. GitHub Actions runs this suite on pushes and pull requests and stores screenshots as artifacts; it does not publish the site.
+
+Verified in the implementation workspace: six deterministic tests passed, JavaScript syntax checks passed, and `git diff --check` passed. Local Chromium could not launch because the managed environment denied its process-singleton socket (`Operation not permitted`). Browser tests and fresh screenshots therefore remain unverified locally; the Actions suite is provided to run them in a normal browser environment. AI model inference was not rerun in this revision. The benchmark numbers above are the original author's historical measurements, not new results.
+
+### Editing limits
+
+The working image and exports are capped at 2048 pixels on the long side. History is session-only, bounded to 12 strokes, and can use around 48 MB for a square 2048-pixel mask, in addition to canvases/model memory. Restoring cannot recover pixels that were already transparent in the source. There is no zoom/pan, automatic edge decontamination, project-save format, or batch mode. A manual brush helps correct the model; it does not replace professional hair matting. WebP is lossy, including colour near edges; use PNG for lossless delivery. First AI use still needs third-party runtime/model downloads; manual processing itself requires none. Fonts may still be fetched from Google Fonts.

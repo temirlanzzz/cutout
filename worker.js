@@ -113,12 +113,16 @@ async function run(id, pixels, width, height) {
   }, [mask.buffer]);
 }
 
-self.onmessage = async (e) => {
+// Serialize runs so quick photo replacement never overlaps model sessions.
+let queue = Promise.resolve();
+self.onmessage = (e) => {
+  queue = queue.then(async () => {
   const msg = e.data;
   try {
     if (msg.type === 'load') await load(msg.pref || 'auto');
     else if (msg.type === 'run') await run(msg.id, msg.pixels, msg.width, msg.height);
   } catch (err) {
-    post({ type: 'error', where: msg.type, message: (err && (err.message || String(err))) || 'unknown error' });
+    post({ type: 'error', id: msg.id, where: msg.type, message: (err && (err.message || String(err))) || 'unknown error' });
   }
+  });
 };

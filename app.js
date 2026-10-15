@@ -1,3 +1,4 @@
+import { dimensions, paintMask, MaskHistory, exportName } from './editor.js';
 // Cutout — page logic: input, worker orchestration, compositing, before/after divider.
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -27,7 +28,7 @@ const state = {
   maskG: document.createElement('canvas'),   // grayscale mask for the "mask" view
   hasMask: false,
   mode: 'transparent', color: '#ffffff', grad: 'studio', blur: 14,
-  view: 'split', x: 50,
+  view: 'split', x: 50, loadId: 0, tool: 'compare', alpha: null, history: new MaskHistory(), brush: 60, softness: .35, cursor: { x: 0, y: 0 },
 };
 
 const fmtS = (ms) => ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms';
@@ -37,8 +38,10 @@ function setStatus(text, err) {
   el.status.textContent = text;
   el.status.classList.toggle('err', !!err);
 }
+let progressTimer;
 function setProgress(frac) {
-  if (frac == null) { el.prog.style.opacity = 0; setTimeout(() => { el.prog.style.width = '0' }, 400); return; }
+  clearTimeout(progressTimer);
+  if (frac == null) { el.prog.style.opacity = 0; progressTimer = setTimeout(() => { el.prog.style.width = '0' }, 400); return; }
   el.prog.style.opacity = 1;
   el.prog.style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%';
 }
@@ -52,6 +55,7 @@ function ensureWorker() {
   state.ready = new Promise((resolve, reject) => {
     state.worker.onmessage = (e) => {
       const m = e.data;
+      if (m.id != null && m.id !== state.runId) return;
       if (m.type === 'progress') {
         if (m.status === 'progress' && m.total) {
           files.set(m.file, { loaded: m.loaded, total: m.total });
@@ -98,6 +102,9 @@ function ensureWorker() {
     };
     state.worker.onerror = (e) => {
       const msg = e.message || 'worker failed to start';
+      cutout.busy = false;
+      el.stage.classList.remove('working');
+      setProgress(null);
       cutout.errors.push('worker: ' + msg);
       setStatus('worker error: ' + msg, true);
       state.ready = null;
@@ -119,14 +126,18 @@ function showInfo() {
 }
 
 /* ---------------- input ---------------- */
-async function loadBlob(blob, name) {
+async function loadBlob(blob, name, token = ++state.loadId) {
+  if (token !== state.loadId) return;
   if (!blob || !/^image\//.test(blob.type || 'image/')) { setStatus('that file is not an image', true); return; }
   let bmp;
   try { bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' }); }
-  catch (_) { setStatus('could not decode that image', true); return; }
+  catch (_) { if (token === state.loadId) setStatus('Could not decode that image. Try JPG, PNG or WebP.', true); return; }
+  if (token !== state.loadId) { bmp.close(); return; }
+  state.runId++;
+  clearEdits();
   state.name = (name || 'photo').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '-').slice(0, 40) || 'photo';
-  const s = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
-  const W = state.W = Math.round(bmp.width * s), H = state.H = Math.round(bmp.height * s);
+  const [W, H] = dimensions(bmp.width, bmp.height, MAX_SIDE);
+  state.W = W; state.H = H;
   for (const c of [state.src, state.cut, el.before, el.after]) { c.width = W; c.height = H; }
   const sctx = state.src.getContext('2d');
   sctx.imageSmoothingQuality = 'high';
@@ -143,10 +154,14 @@ async function loadBlob(blob, name) {
   el.download.disabled = true;
   el.reset.disabled = false;
   el.sImg.textContent = W + '×' + H;
-  segment();
+  $('#manual').disabled = false;
+  updateExportInfo();
+  if ($('#useAI').checked) segment(); else startManual();
 }
 
 async function segment() {
+  clearEdits();
+  el.download.disabled = true;
   const id = ++state.runId;
   cutout.busy = true;
   const s = Math.min(1, MODEL_SIDE / Math.max(state.W, state.H));
@@ -155,7 +170,10 @@ async function segment() {
   const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high'; ctx.drawImage(state.src, 0, 0, w, h);
   const pixels = ctx.getImageData(0, 0, w, h).data.buffer;
   el.busyText.textContent = state.info ? 'segmenting' : 'loading model';
-  try { await ensureWorker(); } catch (_) { return; }
+  try { await ensureWorker(); } catch (err) {
+    if (id === state.runId) { cutout.busy = false; el.stage.classList.remove('working'); setProgress(null); setStatus('AI unavailable. Start manually below, or reopen the photo to retry.', true); }
+    return;
+  }
   if (id !== state.runId) return;
   el.busyText.textContent = 'segmenting';
   setStatus('segmenting on ' + (state.info.device === 'webgpu' ? 'webgpu' : 'wasm ×' + state.info.threads) + '…');
@@ -185,6 +203,12 @@ function onMask(m) {
   cctx.drawImage(state.maskA, 0, 0, state.W, state.H);
   cctx.globalCompositeOperation = 'source-over';
   state.hasMask = true;
+  $('#manual').disabled = true;
+  const scaled = document.createElement('canvas'); scaled.width = state.W; scaled.height = state.H;
+  scaled.getContext('2d').drawImage(state.maskA, 0, 0, state.W, state.H);
+  const rgba = scaled.getContext('2d').getImageData(0, 0, state.W, state.H).data;
+  state.alpha = Uint8ClampedArray.from({ length: state.W * state.H }, (_, i) => rgba[i * 4 + 3]);
+  updateEditControls();
 
   const t = m.timings;
   const wall = performance.now() - state.t0;
@@ -238,7 +262,7 @@ function paintBackground(ctx, W, H) {
 function composite(ctx, W, H) {
   ctx.clearRect(0, 0, W, H);
   paintBackground(ctx, W, H);
-  ctx.drawImage(state.cut, 0, 0);
+  ctx.drawImage(state.cut, 0, 0, W, H);
 }
 
 function render() {
@@ -264,11 +288,12 @@ function setX(x) {
 }
 let dragging = false;
 const fromEvent = (e) => { const r = el.stage.getBoundingClientRect(); setX((e.clientX - r.left) / r.width * 100); };
-el.stage.addEventListener('pointerdown', (e) => { if (state.view !== 'split') return; dragging = true; el.stage.setPointerCapture(e.pointerId); fromEvent(e); });
+el.stage.addEventListener('pointerdown', (e) => { if (state.tool !== 'compare' || state.view !== 'split' || cutout.busy) return; dragging = true; el.stage.setPointerCapture(e.pointerId); fromEvent(e); });
 el.stage.addEventListener('pointermove', (e) => { if (dragging) fromEvent(e); });
 el.stage.addEventListener('pointerup', () => { dragging = false; });
 el.stage.addEventListener('pointercancel', () => { dragging = false; });
 el.stage.addEventListener('keydown', (e) => {
+  if (state.tool !== 'compare') return;
   const step = e.shiftKey ? 10 : 2;
   if (e.key === 'ArrowLeft') { setX(state.x - step); e.preventDefault(); }
   else if (e.key === 'ArrowRight') { setX(state.x + step); e.preventDefault(); }
@@ -308,6 +333,7 @@ el.blurAmt.addEventListener('input', () => {
 });
 $('#viewMode').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
+  setTool('compare');
   pressGroup($('#viewMode'), b); state.view = b.dataset.view; render();
 });
 $('#backendPref').addEventListener('click', (e) => {
@@ -320,27 +346,46 @@ $('#backendPref').addEventListener('click', (e) => {
   el.prefNote.textContent = state.pref === 'webgpu'
     ? 'Trying WebGPU (fp16, ~88 MB). On my machine ONNX Runtime rejects one MaxPool op on WebGPU, so expect a fallback to WASM.'
     : 'WASM with int8 weights (~44 MB) and one thread per core, up to 8, when the page is cross-origin isolated.';
-  if (state.W) { el.stage.classList.add('working'); segment(); } else setStatus('backend set to ' + state.pref);
+  if (state.W && $('#useAI').checked) { el.stage.classList.add('working'); segment(); } else setStatus('backend set to ' + state.pref);
 });
 $$('#backendPref button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.pref === state.pref)));
 
+function updateExportInfo() {
+  const scale = +$('#exportScale').value;
+  $('#exportInfo').textContent = state.W ? `${Math.max(1, Math.round(state.W * scale))} × ${Math.max(1, Math.round(state.H * scale))} px · ${$('#exportFormat').value.toUpperCase()}` : 'Up to 2048 px · transparency preserved';
+}
+$('#exportScale').onchange = updateExportInfo;
+$('#exportFormat').onchange = updateExportInfo;
 el.download.addEventListener('click', () => {
-  if (!state.hasMask) return;
-  const c = document.createElement('canvas'); c.width = state.W; c.height = state.H;
-  composite(c.getContext('2d'), state.W, state.H);
+  if (!state.hasMask || cutout.busy) return;
+  cancelAnimationFrame(editFrame); applyAlpha();
+  const c = document.createElement('canvas');
+  const scale = +$('#exportScale').value;
+  c.width = Math.max(1, Math.round(state.W * scale)); c.height = Math.max(1, Math.round(state.H * scale));
+  // Composite at working resolution, then downsample to keep blur identical at all export sizes.
+  const full = document.createElement('canvas'); full.width = state.W; full.height = state.H;
+  composite(full.getContext('2d'), state.W, state.H);
+  const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high'; ctx.drawImage(full, 0, 0, c.width, c.height);
+  const format = $('#exportFormat').value;
+  const name = exportName(state.name, state.mode, format);
   c.toBlob((blob) => {
+    if (!blob) { setStatus('Export failed. Try a smaller size or PNG.', true); return; }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'cutout-' + state.name + (state.mode === 'transparent' ? '' : '-' + state.mode) + '.png';
+    a.download = blob.type === 'image/png' ? name.replace(/\.webp$/, '.png') : name;
     document.body.appendChild(a); a.click(); a.remove();
+    setStatus(`Exported ${c.width} × ${c.height} · ${mb(blob.size)} MB`);
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  }, 'image/png');
+  }, 'image/' + format, .92);
 });
 el.reset.addEventListener('click', () => {
+  if (cutout.busy && state.worker) { state.worker.terminate(); state.worker = null; state.ready = null; state.info = null; setProgress(null); }
+  state.loadId++; clearEdits(); $('#manual').disabled = true;
   state.runId++; state.W = 0; state.hasMask = false; cutout.busy = false;
   el.stage.hidden = true; el.drop.hidden = false; el.stage.classList.remove('working');
   el.download.disabled = true; el.reset.disabled = true; el.sImg.textContent = '—';
   $$('.thumb').forEach((t) => t.setAttribute('aria-pressed', 'false'));
+  updateExportInfo();
   setStatus(state.info ? 'model ready · drop another photo' : 'model not loaded · ~44 mb on first run');
 });
 
@@ -366,9 +411,14 @@ window.addEventListener('paste', (e) => {
 });
 
 async function runSample(name) {
+  if (!['portrait', 'dog', 'watch'].includes(name)) { setStatus('Unknown sample. Choose one of the three photos.', true); return; }
+  const token = ++state.loadId;
   $$('.thumb').forEach((t) => t.setAttribute('aria-pressed', String(t.dataset.sample === name)));
-  const res = await fetch('photos/' + name + '.jpg');
-  await loadBlob(await res.blob(), name);
+  try {
+    const res = await fetch('photos/' + name + '.jpg');
+    if (!res.ok) throw new Error('Photo unavailable');
+    await loadBlob(await res.blob(), name, token);
+  } catch (_) { if (token === state.loadId) setStatus('Could not open sample. Try your own photo.', true); }
 }
 $$('.thumb').forEach((t) => t.addEventListener('click', () => runSample(t.dataset.sample)));
 cutout.runSample = runSample;
@@ -383,3 +433,120 @@ $('#theme').onclick = () => {
 
 el.sIso.textContent = window.crossOriginIsolated ? 'yes' : 'no (single-threaded)';
 if (params.get('sample')) runSample(params.get('sample'));
+
+/* ---------------- refinement workbench ---------------- */
+let stroke = null;
+let editFrame = 0;
+function clearEdits() {
+  stroke = null; cancelAnimationFrame(editFrame);
+  state.alpha = null; state.history.clear(); state.hasMask = false;
+  setTool('compare'); updateEditControls();
+}
+function updateEditControls() {
+  $('#undo').disabled = !state.history.past.length;
+  $('#redo').disabled = !state.history.future.length;
+  $$('#toolMode button').forEach(b => { b.disabled = b.dataset.tool !== 'compare' && !state.alpha; });
+}
+function setTool(tool) {
+  state.tool = tool;
+  $$('#toolMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tool === tool)));
+  $('#brushControls').hidden = tool === 'compare';
+  $('#brushCursor').hidden = true;
+  el.stage.classList.toggle('editing', tool !== 'compare');
+  el.stage.setAttribute('role', tool === 'compare' ? 'slider' : 'group');
+  el.stage.setAttribute('aria-label', tool === 'compare' ? 'Before / after divider' : `${tool} brush canvas. Arrow keys move brush, Enter paints.`);
+  for (const attr of ['aria-valuemin', 'aria-valuemax', 'aria-valuenow']) el.stage.removeAttribute(attr);
+  if (tool === 'compare') {
+    state.view = 'split';
+    $$('#viewMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === 'split')));
+    el.stage.setAttribute('aria-valuemin', '0'); el.stage.setAttribute('aria-valuemax', '100'); setX(state.x);
+  } else {
+    state.view = 'result';
+    $$('#viewMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === 'result')));
+    state.cursor = { x: state.W / 2, y: state.H / 2 };
+  }
+  render();
+}
+function applyAlpha() {
+  if (!state.alpha) return;
+  for (const c of [state.maskA, state.maskG]) { c.width = state.W; c.height = state.H; }
+  const a = new ImageData(state.W, state.H), g = new ImageData(state.W, state.H);
+  for (let i = 0; i < state.alpha.length; i++) {
+    const j = i * 4, v = state.alpha[i];
+    a.data[j] = a.data[j + 1] = a.data[j + 2] = 255; a.data[j + 3] = v;
+    g.data[j] = g.data[j + 1] = g.data[j + 2] = v; g.data[j + 3] = 255;
+  }
+  state.maskA.getContext('2d').putImageData(a, 0, 0);
+  state.maskG.getContext('2d').putImageData(g, 0, 0);
+  const ctx = state.cut.getContext('2d');
+  ctx.clearRect(0, 0, state.W, state.H); ctx.drawImage(state.src, 0, 0);
+  ctx.globalCompositeOperation = 'destination-in'; ctx.drawImage(state.maskA, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  render(); updateEditControls();
+}
+function startManual() {
+  if (!state.W) return;
+  state.runId++;
+  if (state.worker && cutout.busy) { state.worker.terminate(); state.worker = null; state.ready = null; state.info = null; }
+  clearEdits();
+  state.alpha = new Uint8ClampedArray(state.W * state.H).fill(255);
+  state.hasMask = true; cutout.busy = false;
+  el.stage.classList.remove('working'); setProgress(null);
+  el.download.disabled = false; $('#manual').disabled = true;
+  applyAlpha(); setTool('erase');
+  setStatus('Manual mode · erase the background, restore any detail');
+}
+$('#manual').onclick = startManual;
+$('#toolMode').onclick = e => { const b = e.target.closest('button'); if (b && !b.disabled) setTool(b.dataset.tool); };
+$('#brushSize').oninput = e => { state.brush = +e.target.value; $('#brushOut').textContent = state.brush + ' px'; };
+$('#brushSoftness').oninput = e => { state.softness = +e.target.value / 100; $('#softOut').textContent = e.target.value + '%'; };
+function historyStep(direction) {
+  if (!state.alpha) return;
+  state.alpha = state.history[direction](state.alpha); applyAlpha();
+  setStatus(direction === 'undo' ? 'Mask edit undone' : 'Mask edit restored');
+}
+$('#undo').onclick = () => historyStep('undo');
+$('#redo').onclick = () => historyStep('redo');
+function point(e) {
+  const r = el.stage.getBoundingClientRect();
+  return { x: Math.max(0, Math.min(state.W, (e.clientX - r.left) / r.width * state.W)), y: Math.max(0, Math.min(state.H, (e.clientY - r.top) / r.height * state.H)) };
+}
+function showCursor(p) {
+  const c = $('#brushCursor'); c.hidden = false;
+  c.style.left = p.x / state.W * 100 + '%'; c.style.top = p.y / state.H * 100 + '%';
+  c.style.width = state.brush / state.W * 100 + '%'; c.style.height = state.brush / state.H * 100 + '%';
+}
+function paint(from, to) {
+  paintMask(state.alpha, state.W, state.H, from, to, state.brush / 2, state.tool === 'restore', state.softness);
+  cancelAnimationFrame(editFrame); editFrame = requestAnimationFrame(applyAlpha);
+}
+el.stage.addEventListener('pointerdown', e => {
+  if (state.tool === 'compare' || !state.alpha || e.button !== 0) return;
+  e.preventDefault(); el.stage.focus(); el.stage.setPointerCapture(e.pointerId);
+  state.history.save(state.alpha); stroke = state.cursor = point(e); paint(stroke, stroke); showCursor(stroke);
+});
+el.stage.addEventListener('pointermove', e => {
+  if (state.tool === 'compare' || !state.alpha) return;
+  const p = state.cursor = point(e); showCursor(p);
+  if (stroke) { paint(stroke, p); stroke = p; }
+});
+function finishStroke() { if (stroke) { stroke = null; cancelAnimationFrame(editFrame); applyAlpha(); setStatus('Mask refined · undo is available'); } }
+el.stage.addEventListener('pointerup', finishStroke);
+el.stage.addEventListener('pointercancel', finishStroke);
+el.stage.addEventListener('lostpointercapture', finishStroke);
+el.stage.addEventListener('pointerleave', () => { if (!stroke) $('#brushCursor').hidden = true; });
+el.stage.addEventListener('keydown', e => {
+  if (state.tool === 'compare' || !state.alpha) return;
+  const step = e.shiftKey ? 40 : 5, p = state.cursor;
+  if (e.key === 'ArrowLeft') p.x = Math.max(0, p.x - step);
+  else if (e.key === 'ArrowRight') p.x = Math.min(state.W, p.x + step);
+  else if (e.key === 'ArrowUp') p.y = Math.max(0, p.y - step);
+  else if (e.key === 'ArrowDown') p.y = Math.min(state.H, p.y + step);
+  else if (e.key === 'Enter' || e.key === ' ') { state.history.save(state.alpha); paint(p, p); }
+  else return;
+  showCursor(p); e.preventDefault();
+});
+window.addEventListener('keydown', e => {
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && state.alpha) { e.preventDefault(); historyStep(e.shiftKey ? 'redo' : 'undo'); }
+});

@@ -1,0 +1,1 @@
+{"name":"cutout-studio","private":true,"type":"module","scripts":{"test":"node --test tests/editor.test.js","check":"node --check app.js && node --check worker.js && node --check editor.js"}}
