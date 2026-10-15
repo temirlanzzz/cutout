@@ -87,6 +87,7 @@ try {
     }
   }
   await page.locator('[data-view="result"]').click();
+  await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({path:resolve(root,'docs/studio-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:resolve(root,'docs/studio-mobile.png'),fullPage:true});
