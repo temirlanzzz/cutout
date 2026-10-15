@@ -174,3 +174,8 @@ footer a:hover{color:var(--ink)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 :root{--on-accent:#fff}:root[data-theme="dark"]{--on-accent:#211a30}@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--on-accent:#211a30}}
 .btn.primary{color:var(--on-accent)}.drop .btn.primary{color:#291c43}
+/* Let nested grids shrink on phones; wide benchmark tables scroll in their own wrapper. */
+.sec > div,.demo > .card,.export-options > label{min-width:0}
+.sec{grid-template-columns:minmax(0,1fr)}
+@media(min-width:900px){.sec{grid-template-columns:260px minmax(0,1fr)}}
+.sec code{overflow-wrap:anywhere}

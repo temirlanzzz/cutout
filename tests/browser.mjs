@@ -89,8 +89,14 @@ try {
   await page.locator('[data-view="result"]').click();
   await page.screenshot({path:resolve(root,'docs/studio-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});
-  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.screenshot({path:resolve(root,'docs/studio-mobile.png'),fullPage:true});
+  const overflow = await page.evaluate(() => ({
+    viewport:innerWidth, document:document.documentElement.scrollWidth,
+    elements:[...document.querySelectorAll('body *')].filter(el => {
+      const r=el.getBoundingClientRect(); return r.width>0 && (r.right>innerWidth+1 || r.left< -1);
+    }).map(el=>({tag:el.tagName,id:el.id,class:el.className,width:el.getBoundingClientRect().width})).slice(0,20),
+  }));
+  assert(overflow.document <= overflow.viewport, JSON.stringify(overflow));
   let release;
   const gate = new Promise(r => { release = r; });
   await page.route('**/photos/portrait.jpg', async route => { await gate; await route.continue(); });
